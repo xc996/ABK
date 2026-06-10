@@ -144,6 +144,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 函数说明：将分支名解析为提交 SHA，供需要按特定提交定位 CI 产物时使用。
+          # 输入：仓库名、分支名。
+          # 输出：对应的 40 位提交 SHA；若分支不存在则直接失败退出。
           resolve_ref_to_sha() {
           local repo="$1"
           local ref="$2"
@@ -162,6 +165,9 @@ jobs:
           exit 1
           }
 
+          # 函数说明：按指定 tag 下载 release APK，优先选择名称中带 release 的 APK 资源。
+          # 输入：仓库名、tag 名、变体名。
+          # 输出：将 APK 下载到 manager-artifacts/<variant>/ 目录；若 release 中无 APK 则失败退出。
           download_tag_release_apk() {
             local repo="$1"
             local tag="$2"
@@ -188,6 +194,37 @@ jobs:
             curl -fL -o "manager-artifacts/${variant}/${apk_name}" "$apk_url"
             }
 
+          # 函数说明：下载仓库 latest release 中的 Manager APK，用于 SukiSU Latest 场景优先拿正式版 Manager。
+          # 输入：仓库名、变体名。
+          # 输出：将 latest release 的 APK 下载到 manager-artifacts/<variant>/ 目录；若 latest release 无 APK 则失败退出。
+          download_latest_release_apk() {
+            local repo="$1"
+            local variant="$2"
+            local release_json apk_name apk_url
+            echo "从 $repo releases/latest 获取 $variant Manager APK..."
+            release_json="$(curl -fsSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${repo}/releases/latest")"
+            apk_name="$(echo "$release_json" | jq -r '
+              (.assets | map(select(((.name | ascii_downcase) | endswith(".apk")) and ((.name | ascii_downcase) | contains("release")))) | .[0].name // empty) as $release_apk |
+              if $release_apk != "" then $release_apk
+              else (.assets | map(select((.name | ascii_downcase) | endswith(".apk"))) | .[0].name // empty)
+              end
+            ')"
+            apk_url="$(echo "$release_json" | jq -r --arg name "$apk_name" '.assets[] | select(.name == $name) | .browser_download_url')"
+            if [ -z "$apk_name" ] || [ -z "$apk_url" ]; then
+              echo "::error::${repo} latest release 中未找到 APK 资源"
+              echo "$release_json" | jq -r '.assets[]?.name'
+              exit 1
+            fi
+            mkdir -p "manager-artifacts/${variant}"
+            echo "下载 $apk_name"
+            curl -fL -o "manager-artifacts/${variant}/${apk_name}" "$apk_url"
+          }
+
+          # 函数说明：按源码提交 SHA 下载 CI 构建出的 Manager APK，保持与指定代码状态尽量一致。
+          # 输入：仓库名、变体名。
+          # 输出：将对应 SHA 的 Manager APK 下载到 manager-artifacts/<variant>/ 目录；若找不到有效产物则失败退出。
           download_manager_for_repo() {
           local repo="$1"
           local variant="$2"
@@ -212,7 +249,9 @@ jobs:
               fi
               ;;
             "SukiSU")
-              if [[ "$BRANCH" =~ ^[Vv]?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              if [ "${{ inputs.ksu_branch }}" = "Latest(最新)" ]; then
+                download_latest_release_apk "SukiSU-Ultra/SukiSU-Ultra" "SukiSU"
+              elif [[ "$BRANCH" =~ ^[Vv]?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                 download_tag_release_apk "SukiSU-Ultra/SukiSU-Ultra" "$BRANCH" "SukiSU"
               else
                 download_manager_for_repo "SukiSU-Ultra/SukiSU-Ultra" "SukiSU"
@@ -233,6 +272,13 @@ jobs:
             find manager-artifacts -maxdepth 3 -type f -print || true
             exit 1
           fi
+
+          MANAGER_APK_PATH="$(find manager-artifacts -type f -name '*.apk' | head -n 1)"
+          MANAGER_APK_NAME="$(basename "$MANAGER_APK_PATH")"
+          MANAGER_ARTIFACT_NAME="${MANAGER_APK_NAME%.apk}"
+          echo "MANAGER_APK_NAME=$MANAGER_APK_NAME" >> "$GITHUB_ENV"
+          echo "MANAGER_ARTIFACT_NAME=$MANAGER_ARTIFACT_NAME" >> "$GITHUB_ENV"
+          echo "Manager APK: $MANAGER_APK_NAME"
 
       - name: 添加 SUSFS 模块
         id: add_SUSFS
@@ -282,7 +328,7 @@ jobs:
         if: steps.add_KSU.outcome == 'success'
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ inputs.kernelsu_variant }}-Manager(${{ env.KSU_VERSION }})
+          name: ${{ env.MANAGER_ARTIFACT_NAME }}
           path: |
             **/*.apk
 
