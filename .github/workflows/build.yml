@@ -1370,6 +1370,8 @@ jobs:
         if: inputs.ksu_variant == 'SukiSU'
         working-directory: ${{ env.KERNEL_ROOT }}/KernelSU
         run: |
+          set -euo pipefail
+
           KBUILD_FILE="./kernel/Kbuild"
           CUSTOM_TAG="${{ vars.MANAGER_STR }}"
 
@@ -1377,6 +1379,41 @@ jobs:
             echo "未找到 $KBUILD_FILE，跳过 SukiSU 版本标识定制"
             exit 0
           fi
+
+          # 函数说明：修正 SukiSU 内核侧版本号计算，让 KSU_VERSION 基于当前 checkout 的 HEAD。
+          # 输入：SukiSU kernel/Kbuild 路径。
+          # 输出：原地更新 Kbuild；若上游模板变化导致关键规则未命中，则失败退出避免误构建。
+          python3 - "$KBUILD_FILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          original = text
+
+          replacements = {
+              "git_commit_count = $(shell cd $(KSU_SRC) && $(GIT_BIN) rev-list --count $(REPO_BRANCH) 2>/dev/null)":
+                  "git_commit_count = $(shell cd $(KSU_SRC) && $(GIT_BIN) rev-list --count HEAD 2>/dev/null)",
+              "GITHUB_COMMITS   := $(shell $(CURL_BIN) -sI \"$(GITHUB_API_BASE)/commits?sha=$(REPO_BRANCH)&per_page=1\" 2>/dev/null | grep -i \"link:\" | sed -n 's/.*page=\\([0-9]*\\)>; rel=\"last\".*/\\1/p')":
+                  "GITHUB_COMMITS   :=",
+              "LOCAL_COUNT     := $(if $(GITHUB_COMMITS),$(GITHUB_COMMITS),$(git_commit_count))":
+                  "LOCAL_COUNT     := $(git_commit_count)",
+          }
+
+          missing = []
+          for old, new in replacements.items():
+              if old not in text:
+                  missing.append(old)
+              else:
+                  text = text.replace(old, new, 1)
+
+          if missing:
+              raise SystemExit("SukiSU Kbuild 版本计算模板未命中，缺失规则: " + "; ".join(missing))
+
+          if text != original:
+              path.write_text(text)
+              print("已修正 SukiSU Kbuild 版本计算为当前 HEAD")
+          PY
 
           GIT_HASH=$(git rev-parse --short=8 HEAD)
           BRANCH_NAME="${BRANCH#-s }"
