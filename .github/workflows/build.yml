@@ -536,9 +536,21 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.ccache
-          key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ inputs.ksu_branch }}-${{ inputs.custom_ref || 'default' }}-susfs-${{ inputs.enable_susfs }}-kpm-${{ inputs.use_kpm }}-virt-${{ inputs.virtualization_support }}-v2
           restore-keys: |
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-
+            ccache-${{ runner.os }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ inputs.ksu_branch }}-${{ inputs.custom_ref || 'default' }}-
+            ccache-${{ runner.os }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-
+            ccache-${{ runner.os }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-
+
+      - name: 恢复 Bazel 磁盘缓存
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/bazel
+          key: bazel-${{ runner.os }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ inputs.ksu_branch }}-${{ inputs.custom_ref || 'default' }}-susfs-${{ inputs.enable_susfs }}-kpm-${{ inputs.use_kpm }}-virt-${{ inputs.virtualization_support }}-v1
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-${{ inputs.ksu_branch }}-${{ inputs.custom_ref || 'default' }}-
+            bazel-${{ runner.os }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-${{ inputs.ksu_variant }}-
+            bazel-${{ runner.os }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-
 
       - name: 缓存工具链
         id: cache-toolchain
