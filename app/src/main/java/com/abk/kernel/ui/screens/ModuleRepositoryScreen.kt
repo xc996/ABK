@@ -3,8 +3,10 @@
 package com.abk.kernel.ui.screens
 
 import android.content.Context
+import android.os.Environment
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -52,12 +54,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import com.abk.kernel.ui.components.ShimmerLinearProgress
+import com.abk.kernel.ui.components.AbkInlineLoadingPill
+import com.abk.kernel.ui.components.rememberAbkInteractiveRefreshPresentation
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -102,7 +104,9 @@ import com.abk.kernel.data.model.ModuleCatalogItem
 import com.abk.kernel.data.model.ModuleCatalogRepository
 import com.abk.kernel.data.model.RuntimeModuleCatalogItem
 import com.abk.kernel.data.model.RuntimeModuleRepository
+import com.abk.kernel.data.model.downloadFileName
 import com.abk.kernel.ui.components.AbkScreenHorizontalPadding
+import com.abk.kernel.ui.components.AppPageBackground
 import com.abk.kernel.ui.components.ObserveChildPageVisibility
 import com.abk.kernel.ui.components.childPageOverlayEnterTransition
 import com.abk.kernel.ui.components.childPageOverlayExitTransition
@@ -112,6 +116,7 @@ import com.abk.kernel.ui.components.rememberChildPageOverlayTransition
 import com.abk.kernel.ui.components.ExpressiveSectionCard
 import com.abk.kernel.ui.components.ExpressiveStatusChip
 import com.abk.kernel.ui.components.ExpressiveTopBar
+import com.abk.kernel.ui.theme.appPageBackgroundColor
 import com.abk.kernel.ui.theme.uiSurfaceColor
 import com.abk.kernel.utils.LocaleHelper
 import com.abk.kernel.utils.DownloadUtils
@@ -250,7 +255,7 @@ fun ModuleRepositoryScreen(
         scope.launch {
             val downloadName = module.module.downloadFileName()
             val downloadResult = withContext(Dispatchers.IO) {
-                DownloadUtils.downloadDirectAsset(
+                DownloadUtils.downloadRuntimeModuleAsset(
                     context = context,
                     token = null,
                     url = module.module.zipUrl,
@@ -341,7 +346,7 @@ fun ModuleRepositoryScreen(
             .offset(y = -childPageTopInset)
 
         Scaffold(
-            containerColor = uiSurfaceColor(MaterialTheme.colorScheme.surface),
+            containerColor = appPageBackgroundColor(uiSurfaceColor(MaterialTheme.colorScheme.surface)),
             topBar = {
                 ExpressiveTopBar(
                     title = runtimeRepoTitleLabel(context),
@@ -805,7 +810,7 @@ private fun BuildModuleRepositoryScreenContent(
             .offset(y = -childPageTopInset)
 
         Scaffold(
-            containerColor = uiSurfaceColor(MaterialTheme.colorScheme.surface),
+            containerColor = appPageBackgroundColor(uiSurfaceColor(MaterialTheme.colorScheme.surface)),
             topBar = {
                 ExpressiveTopBar(
                     title = buildRepoTitleLabel(context),
@@ -950,8 +955,8 @@ private fun RuntimeModuleRepositoryListContent(
 
         if (refreshing && !showInitialLoading) {
             item(key = "refreshing") {
-                ShimmerLinearProgress(
-                    progress = { null },
+                AbkInlineLoadingPill(
+                    text = stringResource(R.string.module_repo_building_list),
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -989,24 +994,11 @@ private fun RuntimeModuleRepositoryListContent(
 
 @Composable
 private fun ModuleRepositoryInitialLoading() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 48.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            LoadingIndicator(Modifier.size(42.dp))
-            Text(
-                text = stringResource(R.string.module_repo_building_list),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
+    AbkInlineLoadingPill(
+        text = stringResource(R.string.module_repo_building_list),
+        modifier = Modifier.padding(vertical = 48.dp),
+        compact = false
+    )
 }
 
 @Composable
@@ -1281,6 +1273,9 @@ private fun RuntimeModuleRepositorySettingsPage(
     onRefreshRepository: (String) -> Unit,
     onDeleteRepository: (String) -> Unit
 ) {
+    val refreshAllPresentation = rememberAbkInteractiveRefreshPresentation(
+        loading = refreshingRepositoryIds.isNotEmpty()
+    )
     var repositoryUrl by rememberSaveable { mutableStateOf("") }
     Column(
         modifier = Modifier
@@ -1319,7 +1314,10 @@ private fun RuntimeModuleRepositorySettingsPage(
                     Text(stringResource(R.string.add))
                 }
                 OutlinedButton(
-                    onClick = onRefreshAll,
+                    onClick = {
+                        refreshAllPresentation.beginRefresh()
+                        onRefreshAll()
+                    },
                     enabled = repositories.isNotEmpty(),
                     modifier = Modifier
                         .weight(1f)
@@ -1344,6 +1342,12 @@ private fun RuntimeModuleRepositorySettingsPage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        } else if (refreshAllPresentation.showLoading) {
+            AbkInlineLoadingPill(
+                text = stringResource(R.string.module_repo_building_list),
+                modifier = Modifier.fillMaxWidth(),
+                compact = false
+            )
         } else {
             repositories.forEach { repository ->
                 RuntimeModuleRepositoryCard(
@@ -1366,74 +1370,79 @@ private fun RuntimeModuleRepositoryCard(
     onRefresh: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val refreshPresentation = rememberAbkInteractiveRefreshPresentation(loading = refreshing)
     ExpressiveSectionCard(
         title = repository.name.ifBlank { repository.url },
         subtitle = repository.url,
         icon = Icons.Default.Dns
     ) {
-        if (refreshing) {
-            ShimmerLinearProgress(
-                progress = { null },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ExpressiveStatusChip(
-                label = stringResource(R.string.module_repo_module_count, repository.modules.size),
-                icon = Icons.Default.Extension,
-                color = MaterialTheme.colorScheme.primary
-            )
-            if (repository.skippedCount > 0) {
-                ExpressiveStatusChip(
-                    label = stringResource(R.string.module_repo_skipped_count, repository.skippedCount),
-                    icon = Icons.Default.Link,
-                    color = MaterialTheme.colorScheme.error
+        Crossfade(targetState = refreshPresentation.showLoading, label = "runtime-repo-card-refresh") { showingLoading ->
+            if (showingLoading) {
+                AbkInlineLoadingPill(
+                    text = stringResource(R.string.module_repo_refreshing_repository),
+                    modifier = Modifier.fillMaxWidth()
                 )
-            }
-        }
-        repository.error?.let {
-            Text(
-                text = it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        val indexUrl = repository.indexJsonUrl.ifBlank { repository.url }
-        Text(
-            text = indexUrl,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = onRefresh,
-                enabled = !refreshing,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(42.dp)
-            ) {
-                if (refreshing) {
-                    CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(17.dp))
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ExpressiveStatusChip(
+                            label = stringResource(R.string.module_repo_module_count, repository.modules.size),
+                            icon = Icons.Default.Extension,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (repository.skippedCount > 0) {
+                            ExpressiveStatusChip(
+                                label = stringResource(R.string.module_repo_skipped_count, repository.skippedCount),
+                                icon = Icons.Default.Link,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    repository.error?.let {
+                        Text(
+                            text = it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    val indexUrl = repository.indexJsonUrl.ifBlank { repository.url }
+                    Text(
+                        text = indexUrl,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                refreshPresentation.beginRefresh()
+                                onRefresh()
+                            },
+                            enabled = !refreshing,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.refresh))
+                        }
+                        OutlinedButton(
+                            onClick = onDelete,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(42.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, null, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.delete))
+                        }
+                    }
                 }
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.refresh))
-            }
-            OutlinedButton(
-                onClick = onDelete,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(42.dp)
-            ) {
-                Icon(Icons.Default.Delete, null, modifier = Modifier.size(17.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.delete))
             }
         }
     }
@@ -1608,32 +1617,10 @@ private fun ModuleRepositoryPageBackground(
     backgroundUri: String?,
     backgroundImageEnabled: Boolean
 ) {
-    val colorScheme = MaterialTheme.colorScheme
-    val hasBackground = backgroundImageEnabled && !backgroundUri.isNullOrBlank()
-    val scrimColor = if (colorScheme.surface.luminance() > 0.5f) {
-        colorScheme.surface.copy(alpha = 0.28f)
-    } else {
-        Color.Black.copy(alpha = 0.38f)
-    }
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colorScheme.surface)
-    ) {
-        if (hasBackground) {
-            AsyncImage(
-                model = backgroundUri,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(scrimColor)
-            )
-        }
-    }
+    AppPageBackground(
+        backgroundUri = backgroundUri,
+        backgroundImageEnabled = backgroundImageEnabled
+    )
 }
 
 private data class MergedRuntimeCatalogModule(
@@ -1685,14 +1672,6 @@ private fun RuntimeModuleCatalogItem.preferredOpenUrl(): String =
         ?: website.takeIf { it.isNotBlank() }
         ?: donate.takeIf { it.isNotBlank() }
         ?: zipUrl
-
-private fun RuntimeModuleCatalogItem.downloadFileName(): String {
-    val base = id.ifBlank { name }
-        .replace(Regex("""[^A-Za-z0-9._-]"""), "_")
-        .trim('_')
-        .ifBlank { "module" }
-    return if (base.endsWith(".zip", ignoreCase = true)) base else "${base}-module.zip"
-}
 
 private fun String.repoName(): String =
     trim()
@@ -1773,8 +1752,8 @@ private fun BuildModuleRepositoryListContent(
 
         if (refreshing && !showInitialLoading) {
             item(key = "refreshing") {
-                ShimmerLinearProgress(
-                    progress = { null },
+                AbkInlineLoadingPill(
+                    text = stringResource(R.string.module_repo_building_list),
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -1956,6 +1935,9 @@ private fun BuildModuleRepositorySettingsPage(
     onDeleteRepository: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val refreshAllPresentation = rememberAbkInteractiveRefreshPresentation(
+        loading = refreshingRepositoryIds.isNotEmpty()
+    )
     var repositoryUrl by rememberSaveable { mutableStateOf("") }
     Column(
         modifier = Modifier
@@ -1992,7 +1974,10 @@ private fun BuildModuleRepositorySettingsPage(
                     Text(stringResource(R.string.add))
                 }
                 OutlinedButton(
-                    onClick = onRefreshAll,
+                    onClick = {
+                        refreshAllPresentation.beginRefresh()
+                        onRefreshAll()
+                    },
                     enabled = repositories.isNotEmpty(),
                     modifier = Modifier.weight(1f).height(44.dp)
                 ) {
@@ -2015,6 +2000,12 @@ private fun BuildModuleRepositorySettingsPage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        } else if (refreshAllPresentation.showLoading) {
+            AbkInlineLoadingPill(
+                text = stringResource(R.string.module_repo_building_list),
+                modifier = Modifier.fillMaxWidth(),
+                compact = false
+            )
         } else {
             repositories.forEach { repository ->
                 BuildModuleCatalogRepositoryCard(
@@ -2037,70 +2028,75 @@ private fun BuildModuleCatalogRepositoryCard(
     onRefresh: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val refreshPresentation = rememberAbkInteractiveRefreshPresentation(loading = refreshing)
     ExpressiveSectionCard(
         title = repository.name.ifBlank { repository.url },
         subtitle = repository.url,
         icon = Icons.Default.Dns
     ) {
-        if (refreshing) {
-            ShimmerLinearProgress(
-                progress = { null },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ExpressiveStatusChip(
-                label = stringResource(R.string.module_repo_module_count, repository.modules.size),
-                icon = Icons.Default.Extension,
-                color = MaterialTheme.colorScheme.primary
-            )
-            if (repository.skippedCount > 0) {
-                ExpressiveStatusChip(
-                    label = stringResource(R.string.module_repo_skipped_count, repository.skippedCount),
-                    icon = Icons.Default.Link,
-                    color = MaterialTheme.colorScheme.error
+        Crossfade(targetState = refreshPresentation.showLoading, label = "build-repo-card-refresh") { showingLoading ->
+            if (showingLoading) {
+                AbkInlineLoadingPill(
+                    text = stringResource(R.string.module_repo_refreshing_repository),
+                    modifier = Modifier.fillMaxWidth()
                 )
-            }
-        }
-        repository.error?.let {
-            Text(
-                text = it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        val indexUrl = repository.indexJsonUrl.ifBlank { repository.url }
-        Text(
-            text = indexUrl,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = onRefresh,
-                enabled = !refreshing,
-                modifier = Modifier.weight(1f).height(42.dp)
-            ) {
-                if (refreshing) {
-                    CircularProgressIndicator(modifier = Modifier.size(17.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(17.dp))
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ExpressiveStatusChip(
+                            label = stringResource(R.string.module_repo_module_count, repository.modules.size),
+                            icon = Icons.Default.Extension,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (repository.skippedCount > 0) {
+                            ExpressiveStatusChip(
+                                label = stringResource(R.string.module_repo_skipped_count, repository.skippedCount),
+                                icon = Icons.Default.Link,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    repository.error?.let {
+                        Text(
+                            text = it,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    val indexUrl = repository.indexJsonUrl.ifBlank { repository.url }
+                    Text(
+                        text = indexUrl,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                refreshPresentation.beginRefresh()
+                                onRefresh()
+                            },
+                            enabled = !refreshing,
+                            modifier = Modifier.weight(1f).height(42.dp)
+                        ) {
+                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.refresh))
+                        }
+                        OutlinedButton(
+                            onClick = onDelete,
+                            modifier = Modifier.weight(1f).height(42.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, null, modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.delete))
+                        }
+                    }
                 }
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.refresh))
-            }
-            OutlinedButton(
-                onClick = onDelete,
-                modifier = Modifier.weight(1f).height(42.dp)
-            ) {
-                Icon(Icons.Default.Delete, null, modifier = Modifier.size(17.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.delete))
             }
         }
     }

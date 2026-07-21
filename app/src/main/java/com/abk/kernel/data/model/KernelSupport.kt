@@ -277,7 +277,11 @@ object KernelSupport {
         } else {
             "sm8650"
         }
+        val normalizedKsuBranch = normalizeKsuBranch(
+            if (isOnePlus || ksuVariant == KSU_VARIANT_NONE) KSU_BRANCH_STABLE else config.kernelsuBranch
+        )
         val onePlusKpmSupported = ksuVariant in setOf(KSU_VARIANT_SUKISU, KSU_VARIANT_RESUKISU)
+        val gkiKpmSupported = isKpmSupported(BUILD_TARGET_GKI, ksuVariant, normalizedKsuBranch)
         val onePlusProxyAllowed = !onePlusCpu.startsWith("mt")
         val onePlusSusfsEnabled = onePlusSusfsSupported(line.androidVersion, line.kernelVersion)
         return config.copy(
@@ -287,9 +291,7 @@ object KernelSupport {
             subLevel = subLevel,
             osPatchLevel = osPatch,
             kernelsuVariant = ksuVariant,
-            kernelsuBranch = normalizeKsuBranch(
-                if (isOnePlus || ksuVariant == KSU_VARIANT_NONE) KSU_BRANCH_STABLE else config.kernelsuBranch
-            ),
+            kernelsuBranch = normalizedKsuBranch,
             customRef = if (isOnePlus) "" else config.customRef.trim(),
             version = if (isOnePlus) "" else config.version,
             buildTime = if (isOnePlus) "" else config.buildTime,
@@ -301,15 +303,20 @@ object KernelSupport {
             useKpm = when {
                 ksuVariant == KSU_VARIANT_NONE -> false
                 isOnePlus -> onePlusKpmSupported && config.useKpm
-                else -> config.useKpm
+                else -> gkiKpmSupported && config.useKpm
             },
             cancelSusfs = when {
                 ksuVariant == KSU_VARIANT_NONE -> true
                 isOnePlus && !onePlusSusfsEnabled -> true
                 else -> config.cancelSusfs
             },
-            kpmPassword = if (isOnePlus || ksuVariant == KSU_VARIANT_NONE) "" else config.kpmPassword,
+            kpmPassword = if (isOnePlus || ksuVariant == KSU_VARIANT_NONE || !gkiKpmSupported) "" else config.kpmPassword,
             virtualizationSupport = if (isOnePlus) "off" else normalizeVirtualizationSupport(line.kernelVersion, config.virtualizationSupport),
+            customKernelOptions = if (isOnePlus) {
+                emptyList()
+            } else {
+                normalizeCustomKernelOptions(config.customKernelOptions)
+            },
             useCustomExternalModules = if (isOnePlus) false else config.useCustomExternalModules,
             customExternalModules = if (isOnePlus) {
                 emptyList()
@@ -374,6 +381,37 @@ object KernelSupport {
         return "${profile.displayName} · ${profile.systemVersion} · ${profile.androidVersion}/${profile.kernelVersion} · ${profile.cpu}"
     }
 
+    fun normalizeCustomKernelSymbol(value: String?): String {
+        val compact = value.orEmpty().trim().replace(Regex("\\s+"), "")
+        if (compact.isBlank()) return ""
+        val withPrefix = if (compact.startsWith("CONFIG_", ignoreCase = true)) {
+            compact
+        } else {
+            "CONFIG_$compact"
+        }
+        val upper = withPrefix.uppercase()
+        return if (Regex("^CONFIG_[A-Z0-9_]+$").matches(upper)) upper else ""
+    }
+
+    fun normalizeCustomKernelOptions(options: List<CustomKernelOption>?): List<CustomKernelOption> {
+        if (options.isNullOrEmpty()) return emptyList()
+        val ordered = linkedMapOf<String, CustomKernelOption>()
+        options.forEach { option ->
+            val symbol = normalizeCustomKernelSymbol(option.symbol)
+            if (symbol.isBlank()) return@forEach
+            val mode = CustomKernelOptionMode.normalize(option.mode)
+            val normalized = CustomKernelOption(
+                symbol = symbol,
+                mode = mode,
+                rawValue = if (mode == CustomKernelOptionMode.RAW) option.rawValue.trim() else "",
+                source = option.source.trim()
+            )
+            ordered.remove(symbol)
+            ordered[symbol] = normalized
+        }
+        return ordered.values.toList()
+    }
+
     fun normalizeKsuVariant(value: String?): String = normalizeKsuVariant(value, BUILD_TARGET_GKI)
 
     fun normalizeKsuVariant(value: String?, buildTarget: String?): String {
@@ -395,6 +433,21 @@ object KernelSupport {
 
     fun normalizeKsuBranch(value: String): String =
         value.takeIf { it in KSU_BRANCH_STANDARD_OPTIONS } ?: KSU_BRANCH_STABLE
+
+    fun isKpmSupported(buildTarget: String, ksuVariant: String, ksuBranch: String): Boolean {
+        val normalizedTarget = normalizeBuildTarget(buildTarget)
+        val normalizedVariant = normalizeKsuVariant(ksuVariant, normalizedTarget)
+        val normalizedBranch = normalizeKsuBranch(ksuBranch)
+        return when {
+            normalizedVariant == KSU_VARIANT_NONE -> false
+            normalizedVariant == KSU_VARIANT_OFFICIAL -> false
+            normalizedTarget == BUILD_TARGET_ONEPLUS ->
+                normalizedVariant in setOf(KSU_VARIANT_SUKISU, KSU_VARIANT_RESUKISU)
+            normalizedVariant == KSU_VARIANT_RESUKISU &&
+                normalizedBranch !in setOf(KSU_BRANCH_STABLE, KSU_BRANCH_CUSTOM) -> false
+            else -> true
+        }
+    }
 
     fun virtualizationSupportOptions(kernelVersion: String): List<String> =
         if (kernelVersion == "6.12") listOf("off", "on") else listOf("off", "678", "123", "345")
